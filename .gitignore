@@ -2,3 +2,4 @@
 /.vscode
 wallet-private.dat
 wallet-public.dat
+!/wallets/**/**.dat
