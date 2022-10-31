@@ -1,6 +1,6 @@
 use std::{error::Error, num::{NonZeroU32}, fs::File, io::Write, path::Path};
 use chrono::{Utc, DateTime};
-use ring::{pbkdf2, digest, aead::{SealingKey, AES_256_GCM, UnboundKey, BoundKey, Nonce, NonceSequence, Aad, OpeningKey, NONCE_LEN}, error::Unspecified, signature};
+use ring::{pbkdf2, digest, aead::{SealingKey, AES_256_GCM, UnboundKey, BoundKey, Nonce, NonceSequence, Aad, OpeningKey, NONCE_LEN}, error::Unspecified};
 use serde::{Serialize, Deserialize};
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair};
 use serde_big_array::BigArray;
@@ -25,23 +25,28 @@ pub type Wallet = [u8; 65];
 
 const MAX_SIGNATURE_LEN: usize = 105;
 
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
 pub struct Signature {
     #[serde(with = "BigArray")]
-    value: [u8; MAX_SIGNATURE_LEN],
-    len: usize,
+    pub value: [u8; MAX_SIGNATURE_LEN],
+    pub len: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
 pub struct Transaction {
     #[serde(with = "BigArray")]
-    sender: Wallet,
+    pub sender: Wallet,
     #[serde(with = "BigArray")]
-    receiver: Wallet,
-    timestamp: DateTime<Utc>,
-    nonce: [u8; 16],
-    amount: u64,
-    signature: Signature,
+    pub receiver: Wallet,
+
+    // TODO: Date-time verification
+    pub timestamp: DateTime<Utc>,
+    /// The nonce prevents attacks in which a malicious party copies an
+    /// existing transaction and broadcasts it. No two transactions can have
+    /// every field equal, so the nonce adds some randomness to prevent this.
+    pub nonce: [u8; 16],
+    pub amount: u64,
+    pub signature: Signature,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,14 +75,42 @@ impl NonceSequence for NonceGen {
     }
 }
 
-pub fn balance_for_block(block: &Block, wallet: &Wallet) -> u64 {
-    let mut out: u64 = 0;
+pub fn balance_for_block(block: &Block, wallet: &Wallet) -> i128 {
+    let mut out: i128 = 0;
 
     for transaction in block.transactions.iter() {
         if &transaction.sender == wallet {
-            out -= transaction.amount;
-        } else if &transaction.receiver == wallet {
-            out += transaction.amount;
+            out -= transaction.amount as i128;
+        } 
+        
+        if &transaction.receiver == wallet {
+            out += transaction.amount as i128;
+        }
+    }
+
+    out
+}
+
+pub fn verified_balance(blockchain: &Blockchain, wallet: &Wallet) -> i128 {
+    let mut out: i128 = 0;
+
+    for block in blockchain {
+        out += balance_for_block(block, wallet);
+    }
+
+    out
+}
+
+pub fn pending_balance(blockchain: &Blockchain, pending: &Vec<Transaction>, wallet: &Wallet) -> i128 {
+    let mut out: i128 = verified_balance(blockchain, wallet);
+
+    for transaction in pending {
+        if &transaction.sender == wallet {
+            out -= transaction.amount as i128;
+        }
+        
+        if &transaction.receiver == wallet {
+            out += transaction.amount as i128;
         }
     }
 
@@ -96,18 +129,6 @@ pub fn sign_transaction(transaction: UnsignedTransaction, sender: &EcdsaKeyPair)
     let UnsignedTransaction{sender, receiver, timestamp, nonce, amount} = transaction;
 
     Transaction { sender, receiver, timestamp, nonce, amount, signature }
-}
-
-/// TODO: Implement other validity checks, like checking if the sender has enough coins to make this
-/// transaction.
-pub fn is_cryptographically_valid_transaction(transaction: Transaction) -> bool {
-    let Transaction{sender, receiver, timestamp, nonce, amount, signature} = transaction;
-    let unsigned = UnsignedTransaction{ sender, receiver, timestamp, nonce, amount };
-    let bytes = bincode::serialize(&unsigned).expect("Failed to serialize transaction");
-    let true_signature = signature::UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_ASN1, &sender);
-    let sig_len = signature.len;
-    let sig_bytes = &signature.value[..sig_len];
-    true_signature.verify(&bytes, &sig_bytes).is_err()
 }
 
 fn salt_from_password(password: &str) -> [u8; 16] {

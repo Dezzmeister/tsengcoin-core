@@ -11,3 +11,4 @@ chrono = { version = "0.4", features = ["serde"] }
 ring = "0.16.20"
 hex = "0.4.3"
 serde-big-array = "0.4.1"
+periodic = "0.1.1"

@@ -2,6 +2,9 @@ use bincode::Error;
 
 use crate::blocks::UnhashedBlock;
 
+// SHA256 hash, 256 bits
+pub type Hash = [u32; 8];
+
 const BYTES_PER_BLOCK: usize = 512 / 8;
 const INPUT_PAD: u8 = 0b1000_0000;
 
@@ -226,4 +229,23 @@ pub fn hash_sha256(input: &[u8]) -> [u32; 8] {
     }
 
     hash
+}
+
+pub fn to_bytes(hash: Hash) -> [u8; 32] {
+    let mut out = [0 as u8; 32];
+    
+    for i in 0..hash.len() {
+        let int = hash[i];
+        let b1 = ((int & 0xFF00_0000) >> 24) as u8;
+        let b2 = ((int & 0x00FF_0000) >> 16) as u8;
+        let b3 = ((int & 0x0000_FF00) >> 8) as u8;
+        let b4 = (int & 0xFF) as u8;
+
+        out[(4 * i)] = b1;
+        out[(4 * i) + 1] = b2;
+        out[(4 * i) + 2] = b3;
+        out[(4 * i) + 3] = b4;
+    }
+
+    out
 }

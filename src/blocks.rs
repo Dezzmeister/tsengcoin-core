@@ -1,29 +1,29 @@
-use std::path::Path;
+use std::{path::Path, fs::File, io::Write};
 
-use chrono::{Utc, TimeZone, DateTime};
+use chrono::{Utc, TimeZone};
 use ring::signature::EcdsaKeyPair;
 use serde::{Serialize, Deserialize};
 
-use crate::{wallet::{Wallet, Signature, Transaction, hex_to_wallet, load_wallet, UnsignedTransaction, sign_transaction, keypair_to_wallet}, hash::hash_block};
+use crate::{wallet::{Transaction, hex_to_wallet, load_wallet, UnsignedTransaction, sign_transaction, keypair_to_wallet}, hash::hash_block};
+use crate::hash::Hash;
+
+pub const BLOCK_REWARD: u64 = 100;
 
 const BLOCKCHAIN_PATH: &str = "blockchain.dat";
 
-// SHA256 hash, 256 bits
-pub type Hash = [u32; 8];
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy)]
 pub struct Block {
     pub prev_hash: Hash,
     pub transactions: [Transaction; 16],
-    nonce: [u32; 8],
+    pub nonce: [u32; 8],
     pub hash: Hash
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UnhashedBlock {
-    prev_hash: Hash,
-    transactions: [Transaction; 16],
-    nonce: [u32; 8],
+    pub prev_hash: Hash,
+    pub transactions: [Transaction; 16],
+    pub nonce: [u32; 8],
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,21 +33,11 @@ pub struct BlockList {
 }
 
 // TODO: Merkle tree
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Blockchain {
-    pub blocks: BlockList,
-    pub height: u64,
-}
+pub type Blockchain = Vec<Block>;
 
 pub fn load_blockchain() -> Blockchain {
     if !Path::new(BLOCKCHAIN_PATH).exists() {
-        return Blockchain{
-            blocks: BlockList{
-                prev: None,
-                block: make_genesis_block()
-            },
-            height: 1,
-        };
+        return vec![make_genesis_block()];
     }
 
     let bytes = std::fs::read(Path::new(BLOCKCHAIN_PATH)).expect("Failed to read blockchain file which supposedly exists");
@@ -56,13 +46,29 @@ pub fn load_blockchain() -> Blockchain {
     blockchain
 }
 
+pub fn save_blockchain(blockchain: &Blockchain) {
+    let mut file = File::create(BLOCKCHAIN_PATH).expect("Failed to create file handle");
+    let bytes = bincode::serialize(blockchain).expect("Failed to serialize blockchain to bytes");
+
+    file.write_all(&bytes).expect("Failed to write blockchain to file");
+}
+
+pub fn append_blocks(blockchain: &Blockchain, new_blocks: &Vec<Block>) -> Blockchain {
+    let mut out = vec![Block::default(); blockchain.len() + new_blocks.len()];
+
+    out[0..blockchain.len()].copy_from_slice(blockchain);
+    out[blockchain.len()..].copy_from_slice(new_blocks);
+
+    out
+}
+
 ///
 /// This code is temporary! We just need it to create a genesis block which can then be serialized and loaded directly from a file.
 /// Of course we don't want wallets with weak passwords like "horse" and "password1" to have all of the currency, so the final genesis block
 /// won't contain these wallets.
 /// 
 
-const MINT_WALLET: &str = "04d37349ef94359620359581d2e33fa64e9e12015a2c48b6524b53c43e2539dd9262cfd7a68ab1cade279bae68c443063e91877a939af36625b51c15924849a74b";
+pub const MINT_WALLET: &str = "04d37349ef94359620359581d2e33fa64e9e12015a2c48b6524b53c43e2539dd9262cfd7a68ab1cade279bae68c443063e91877a939af36625b51c15924849a74b";
 const PASSWORD1_WALLET: &str = "04186ea3424efe14a5b06599335013b562743f26541d0b45d3ff63b83caaa53873a79cad91046d6dbbb04d7498de0ce7e0b480ba290681a3dbe945618b4ee6357c";
 const HORSE_WALLET: &str = "04644746c2aa410c0acfcf737a3ff6f56b657ab350fbd8f2e8d6863a1175b16c26e041dda0971d686b807bb00a8681f29eba9f4b6c8298b209665a9270f65d628d";
 
