@@ -1,6 +1,6 @@
 # TsengCoin Core
 
-Core client for the TsengCoin blockchain. Build with `cargo build --release`. Run the build binary in `target/release` for maximum speed, or do `cargo run` to run with debugger. Example commands in this README will use `cargo run` but they work on the compiled binary too.
+Core client for the TsengCoin blockchain. Build with `cargo build --release`. Run the built binary in `target/release` for maximum speed, or do `cargo run` to run with debugger. Example commands in this README will use `cargo run` but they work on the compiled binary too.
 
 ## Creating a Wallet
 
