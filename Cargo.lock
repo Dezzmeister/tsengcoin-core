@@ -367,7 +367,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tsengtoken-core"
+name = "tsengcoin-core"
 version = "0.1.0"
 dependencies = [
  "bincode",
