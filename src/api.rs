@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rand::seq::SliceRandom;
 use serde::{Serialize, Deserialize};
 
-use crate::{State, CURRENT_VERSION, blocks::{Block, append_blocks}, wallet::Transaction, verify::verify_new_transaction};
+use crate::{State, CURRENT_VERSION, blocks::{Block, append_blocks}, wallet::Transaction, verify::{verify_new_transaction, verify_blocks}};
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum Request {
@@ -76,21 +76,13 @@ pub struct GetTransactionsRequest {
     pub version: u16,
 }
 
-/// An error type that provides absolutely no information about the error.
-/// Great for sending back to potentially malicious clients.
-#[derive(Serialize, Deserialize, Debug)]
-pub enum BasicErr {
-    Ok,
-    Err
-}
-
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct BroadcastTransactionRequest {
     pub transaction: Transaction,
     pub version: u16
 }
 
-pub type BroadcastTransactionResponse = BasicErr;
+pub type BroadcastTransactionResponse = crate::error::Result<()>;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetNodesResponse {
@@ -109,8 +101,6 @@ pub type ConnectionHandler = fn(&TcpStream, &Mutex<State>) -> ();
 pub fn send_req(req: Request, stream: &TcpStream) -> bincode::Result<()> {
     bincode::serialize_into(stream, &req)
 }
-
-// TODO: Remove neighbor from known nodes if connection fails
 
 pub fn get_neighbors_nodes(neighbor: &SocketAddr, listen_port: u16, best_height: usize, version: u16) -> Result<GetNodesResponse, Box<dyn Error>> {
     let socket = TcpStream::connect(neighbor)?;
@@ -147,13 +137,15 @@ pub fn get_pending_transactions(neighbor: &SocketAddr, version: u16) -> Result<G
     Ok(res)
 }
 
-pub fn broadcast_transaction(neighbor: &SocketAddr, transaction: Transaction, version: u16) -> Result<(), Box<dyn Error>> {
+pub fn broadcast_transaction(neighbor: &SocketAddr, transaction: Transaction, version: u16) -> Result<BroadcastTransactionResponse, Box<dyn Error>> {
     let socket = TcpStream::connect(neighbor)?;
     let req: Request = Request::BroadcastTransaction(BroadcastTransactionRequest { transaction, version });
 
     send_req(req, &socket)?;
 
-    Ok(())
+    let res: BroadcastTransactionResponse = bincode::deserialize_from(socket)?;
+
+    Ok(res)
 }
 
 pub fn handle_get_nodes_req(conn: &TcpStream, req_data: GetNodesRequest, state_mut: &Mutex<State>) {
@@ -217,13 +209,13 @@ pub fn handle_broadcast_transaction_req(conn: &TcpStream, req_data: BroadcastTra
     let state = &mut (*state_guard);
     let new_transaction = req_data.transaction;
 
-    let verify_res = verify_new_transaction(&state.blockchain, &state.pending_transactions, &new_transaction);
+    let verify_res = verify_new_transaction(&state.blockchain, &state.pending_transactions, &new_transaction, true);
 
-    // If we can't verify the transaction, don't propagate it. This prevents transactions with bad amounts or bad signature from being accepted,
+    // If we can't verify the transaction, don't propagate it. This prevents transactions with bad amounts or bad signatures from being accepted,
     // but it also prevents duplicate transactions from being accepted. This is primarily a security mechanism but it also conveniently
     // tells us when to stop propagating a new transaction.
     if verify_res.is_err() {
-        let res: BroadcastTransactionResponse = BasicErr::Err;
+        let res: BroadcastTransactionResponse = verify_res;
         bincode::serialize_into(conn, &res).expect("Failed to respond to broadcast transaction request");
         return;
     }
@@ -255,9 +247,7 @@ pub fn listen_for_connections(this_addr: SocketAddr, handle_connection: Connecti
     Ok(())
 }
 
-pub fn sync_blocks(state_mut: &Mutex<State>) {
-    let mut state_guard = state_mut.lock().unwrap();
-    let mut state = &mut (*state_guard);
+pub fn sync_blocks(state: &mut State ) {
     let nodes = &mut state.nodes;
     let best_height = &mut state.blockchain.len();
 
@@ -310,9 +300,19 @@ pub fn sync_blocks(state_mut: &Mutex<State>) {
             }
 
             let latest_blocks = latest_blocks_opt.unwrap();
+            let mut all_blocks = vec![Block::default(); state.blockchain.len() + latest_blocks.len()];
+            all_blocks[0..state.blockchain.len()].copy_from_slice(&state.blockchain);
+            all_blocks[state.blockchain.len()..].copy_from_slice(&latest_blocks);
+
+            let verification = verify_blocks(&all_blocks);
+
+            if verification.is_err() {
+                println!("Received invalid blockchain from node");
+                continue;
+            }
+
             println!("Appending {} new blocks", latest_blocks.len());
-            let blockchain = &state.blockchain;
-            state.blockchain = append_blocks(blockchain, &latest_blocks);
+            state.blockchain = latest_blocks;
 
             return;
         }

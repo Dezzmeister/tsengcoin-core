@@ -35,8 +35,8 @@ cargo run start <seed-ip> <seed-port> <local-port> <wallet-password>
 The `seed-ip` and `seed-port` point to a running node that the client will use to bootstrap. Bootstrapping has three steps:
 
 1. Ask the first node for more nodes to connect to
-2. Ask the first node for a list of pending transactions
-3. Ask one of the newly obtained nodes for an updated copy of the blockchain
+2. Ask one of the newly obtained nodes for an updated copy of the blockchain
+3. Ask the first node for a list of pending transactions
 
 The `local-port` is the port on which the local node will listen. Every running client must participate in the network as a node, so every client must be able to accept incoming connections from other nodes trying to bootstrap or make a request.
 

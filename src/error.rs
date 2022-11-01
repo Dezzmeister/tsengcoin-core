@@ -1,6 +1,8 @@
 use std::error::{Error as StdError, self};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::blocks::Block;
 use crate::wallet::{Transaction, Signature};
 
@@ -8,7 +10,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub type Error = Box<ErrorKind>;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ErrorKind {
     InvalidBlockHash(String, String),
     InvalidBlockTransaction(Transaction),
@@ -17,6 +19,7 @@ pub enum ErrorKind {
     InvalidTransactionLogic(Transaction),
     UnknownTransaction(Transaction),
     DuplicateTransaction(Transaction),
+    ExpiredTransaction(Transaction),
 }
 
 impl StdError for ErrorKind {
@@ -28,7 +31,8 @@ impl StdError for ErrorKind {
             ErrorKind::InvalidTransactionSignature(_) => "Invalid transaction signature (fradulent transaction)",
             ErrorKind::InvalidTransactionLogic(_) => "Illogical transaction",
             ErrorKind::UnknownTransaction(_) => "Unknown transaction",
-            ErrorKind::DuplicateTransaction(_) => "Duplicate transaction"
+            ErrorKind::DuplicateTransaction(_) => "Duplicate transaction",
+            ErrorKind::ExpiredTransaction(_) => "Expired transaction",
         }
     }
 
@@ -47,6 +51,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::InvalidTransactionLogic(_) => write!(fmt, "{}", self.to_string()),
             ErrorKind::UnknownTransaction(transaction) => write!(fmt, "{}: signature {:x?}", self.to_string(), transaction.signature),
             ErrorKind::DuplicateTransaction(transaction) => write!(fmt, "{}: signature: {:x?}", self.to_string(), transaction.signature),
+            ErrorKind::ExpiredTransaction(transaction) => write!(fmt, "{}: signature: {:x?}", self.to_string(), transaction.signature),
         }
     }
 }

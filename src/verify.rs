@@ -10,12 +10,25 @@
 //        first 15 coming from the beginning of the pending transaction queue. The last transaction
 //        must be a block reward.
 
-use std::{collections::HashMap};
-
+use chrono::{Duration, Utc};
 use ring::signature;
 
-use crate::{wallet::{Transaction, verified_balance, hex_to_wallet, pending_balance, UnsignedTransaction}, blocks::{Block, MINT_WALLET, Blockchain, UnhashedBlock, BLOCK_REWARD}, error::Result, hash::{hash_block, to_bytes}};
-use crate::error::ErrorKind::{InvalidTransactionLogic, InvalidBlockLogic, InvalidTransactionSignature, InvalidBlockHash, InvalidBlockTransaction, DuplicateTransaction};
+use crate::{wallet::{Transaction, hex_to_wallet, pending_balance, UnsignedTransaction}, blocks::{Block, MINT_WALLET, Blockchain, UnhashedBlock, BLOCK_REWARD}, error::Result, hash::{hash_block, to_bytes}};
+use crate::error::ErrorKind::{InvalidTransactionLogic, InvalidBlockLogic, InvalidTransactionSignature, InvalidBlockHash, InvalidBlockTransaction, DuplicateTransaction, ExpiredTransaction};
+
+pub fn verify_blocks(blocks: &Blockchain) -> Result<()> {
+    verify_genesis_block(&blocks[0])?;
+
+    for i in 1..blocks.len() {
+        let chain = &blocks[0..i].to_vec();
+        let new_block = blocks[i];
+        let mut pending_transactions = new_block.transactions[0..15].to_vec();
+
+        verify_new_block(&chain, &mut pending_transactions, &new_block, false)?;
+    }
+
+    Ok(())
+}
 
 /// Assume all pending transactions and all blocks are valid, then check if the new transaction is valid.
 /// Does NOT validate block reward transactions. Those should only be validated when a full block is
@@ -23,7 +36,11 @@ use crate::error::ErrorKind::{InvalidTransactionLogic, InvalidBlockLogic, Invali
 /// 
 /// After a transaction is verified, it can be added to the pending transactions. This is why we can assume
 /// that all pending transactions here are valid.
-pub fn verify_new_transaction(blocks: &Blockchain, pending: &Vec<Transaction>, new_transaction: &Transaction) -> Result<()> {
+pub fn verify_new_transaction(blocks: &Blockchain, pending: &Vec<Transaction>, new_transaction: &Transaction, check_expiry: bool) -> Result<()> {
+    let expiry_duration = Duration::seconds(10);
+    let now = Utc::now();
+    let last_valid_time = now - expiry_duration;
+
     let pending_sender_balance = pending_balance(blocks, pending, &new_transaction.sender);
     let new_balance = pending_sender_balance - (new_transaction.amount as i128);
 
@@ -39,12 +56,24 @@ pub fn verify_new_transaction(blocks: &Blockchain, pending: &Vec<Transaction>, n
         return Err(Box::new(DuplicateTransaction(*new_transaction)));
     }
 
+    if check_expiry && (new_transaction.timestamp < last_valid_time) {
+        return Err(Box::new(ExpiredTransaction(*new_transaction)));
+    }
+
     Ok(())
 }
 
-pub fn verify_new_block(blockchain: &Blockchain, pending_transactions: &mut Vec<Transaction>, new_block: &Block) -> Result<()> {
+pub fn verify_new_block(blockchain: &Blockchain, pending_transactions: &mut Vec<Transaction>, new_block: &Block, check_expiry: bool) -> Result<()> {
     // First, check the hash of the block
     verify_block_hash(blockchain, new_block)?;
+
+    if pending_transactions.len() < 15 {
+        println!("Rejected block on basis that not enough pending transactions existed to be grouped into a block");
+        return Ok(());
+    }
+
+    pending_transactions.sort_by(|t1, t2| {t1.timestamp.cmp(&t2.timestamp)});
+    let earliest_pending = &pending_transactions[0..15];
 
     // Now verify the transactions
     let mut verified_transactions: Vec<Transaction> = vec![];
@@ -70,13 +99,13 @@ pub fn verify_new_block(blockchain: &Blockchain, pending_transactions: &mut Vec<
         }
 
         // Check if the transaction in the block was actually pending or made-up
-        if !pending_transactions.contains(&transaction) {
+        if !earliest_pending.contains(&transaction) {
             return Err(Box::new(InvalidBlockTransaction(transaction)));
         }
 
         // Cryptographic verification, logical verification (is the sender trying to send coins he doesn't have?)
         // and checking if duplicate
-        verify_new_transaction(blockchain, &verified_transactions, &transaction)?;
+        verify_new_transaction(blockchain, &verified_transactions, &transaction, check_expiry)?;
         verified_transactions.push(transaction);
     }
 
@@ -94,23 +123,19 @@ pub fn verify_new_block(blockchain: &Blockchain, pending_transactions: &mut Vec<
     Ok(())
 }
 
-// TODO: Remove
-pub fn verify_transactions(blocks: &Vec<Block>, transactions: &Vec<Transaction>) -> Result<()> {
-    let mut balance_map = HashMap::new();
-    let mint_wallet = hex_to_wallet(MINT_WALLET).expect("Failed to convert mint wallet to bytes");
+pub fn verify_genesis_block(block: &Block) -> Result<()> {
+    verify_block_hash(&vec![], block)?;
 
-    for transaction in transactions {
-        let sender = transaction.sender;
-        let curr_balance = balance_map.get(&sender).cloned().unwrap_or_else(|| {verified_balance(blocks, &sender)});
-        let new_balance = curr_balance - (transaction.amount as i128);
+    let mint_wallet = hex_to_wallet(MINT_WALLET).expect("Failed to convert mint wallet string to bytes");
 
-        if new_balance < 0 && sender != mint_wallet {
-            return Err(Box::new(InvalidTransactionLogic(*transaction)));
+    for transaction in block.transactions {
+        if transaction.sender != mint_wallet {
+            return Err(Box::new(InvalidTransactionLogic(transaction)));
         }
 
-
-
-        balance_map.insert(sender, new_balance);
+        if !is_signature_valid(&transaction, false) {
+            return Err(Box::new(InvalidTransactionSignature(transaction.signature)));
+        }
     }
 
     Ok(())
@@ -142,8 +167,6 @@ fn verify_block_hash(blockchain: &Blockchain, new_block: &Block) -> Result<()> {
     Ok(())
 }
 
-/// TODO: Implement other validity checks, like checking if the sender has enough coins to make this
-/// transaction.
 fn is_signature_valid(transaction: &Transaction, allow_block_reward: bool) -> bool {
     let Transaction{sender, receiver, timestamp, nonce, amount, signature} = *transaction;
     let mint_wallet = hex_to_wallet(MINT_WALLET).expect("Failed to convert mint wallet to bytes");

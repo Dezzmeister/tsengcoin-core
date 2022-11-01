@@ -62,7 +62,10 @@ pub struct UnsignedTransaction {
 
 impl Default for Transaction {
     fn default() -> Self {
-        unsafe { std::mem::zeroed() }
+        let mut out: Self = unsafe { std::mem::zeroed() };
+        out.timestamp = Utc::now();
+
+        out
     }
 }
 

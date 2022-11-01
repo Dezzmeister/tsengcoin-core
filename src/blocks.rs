@@ -19,7 +19,7 @@ pub struct Block {
     pub hash: Hash
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UnhashedBlock {
     pub prev_hash: Hash,
     pub transactions: [Transaction; 16],

@@ -1,7 +1,7 @@
 use std::{error::Error, env, net::{Ipv4Addr, IpAddr, SocketAddr, TcpStream}, sync::{Mutex, Arc}, collections::HashMap, thread, time::Duration};
 
 use api::{RemoteNode, get_neighbors_nodes, Request, listen_for_connections, GetNodesResponse, handle_get_nodes_req, handle_get_blocks_req, handle_get_pending_transactions_req, get_pending_transactions, handle_broadcast_transaction_req};
-use blocks::{Blockchain, load_blockchain};
+use blocks::{Blockchain, load_blockchain, UnhashedBlock};
 use command::dispatch_command;
 use periodic::{Planner, Every};
 use rand::{seq::SliceRandom};
@@ -9,7 +9,8 @@ use ring::signature::EcdsaKeyPair;
 use wallet::{Wallet, create_keypair, load_wallet, PRIVATE_KEY_PATH, keypair_to_wallet, Transaction, pending_balance, UnsignedTransaction, sign_transaction};
 use chrono::{Utc};
 
-use crate::{command::CommandMap, wallet::hex_to_wallet, api::{sync_blocks, broadcast_transaction}};
+use crate::{command::CommandMap, wallet::hex_to_wallet, api::{sync_blocks, broadcast_transaction}, hash::hash_sha256};
+use crate::error::ErrorKind::DuplicateTransaction;
 
 pub mod api;
 pub mod blocks;
@@ -18,6 +19,7 @@ pub mod command;
 pub mod hash;
 pub mod error;
 pub mod verify;
+pub mod cuda;
 
 pub const CURRENT_VERSION: u16 = 1;
 const MAX_NEIGHBORS: usize = 5;
@@ -62,10 +64,14 @@ fn bootstrap(seed: SocketAddr, state: State) -> State {
     let mut full_nodes = Vec::from(nodes);
     full_nodes.push(seed_node);
     let min_nodes = full_nodes.len();
+    let mut state_out = State { nodes: full_nodes, min_nodes, _ip: Some(your_ip), ..state };
+
+    sync_blocks(&mut state_out);
 
     let pending_transactions = get_pending_transactions(&seed, CURRENT_VERSION).expect("Failed to get pending transactions from seed");
+    state_out.pending_transactions = pending_transactions;
 
-    State { nodes: full_nodes, min_nodes, pending_transactions, _ip: Some(your_ip), ..state }
+    state_out
 }
 
 fn handle_connection(conn: &TcpStream, state_mut: &Mutex<State>) {
@@ -169,7 +175,6 @@ fn start(_command_name: &String, args: &Vec<String>, _state: Option<()>) -> Resu
     let state_mut_ref = Arc::clone(&state_mut);
 
     println!("Starting as node on port {listen_port}");
-    sync_blocks(&state_mut);
 
     thread::spawn(move || {
         listen_for_connections(this_addr, handle_connection, &state_mut_ref).unwrap();
@@ -231,6 +236,17 @@ fn send_coins(_command_name: &String, args: &Vec<String>, state_opt: Option<&Mut
         if res.is_err() {
             node.dead = true;
         }
+
+        let broadcast_response = res.unwrap();
+        match broadcast_response {
+            Ok(()) => (),
+            Err(err_box) => {
+                match *err_box {
+                    DuplicateTransaction(_) => (),
+                    err => println!("Rejected transaction due to error: {}", err),
+                }
+            }
+        };
     }
 
     Ok(())
@@ -290,10 +306,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     command_map.insert(String::from("create-wallet"), create_wallet);
     command_map.insert(String::from("start"), start);
     command_map.insert(String::from("start-seed"), start_as_seed);
+    command_map.insert(String::from("test"), test);
 
     let args: Vec<String> = env::args().collect();
 
     dispatch_command(&args[1..].to_vec(), &command_map, None);
 
     Ok(())
+}
+
+fn test(_command_name: &String, _args: &Vec<String>, _state: Option<()>) -> Result<(), Box<dyn Error>> {
+    println!("test");
+    let blank_block = make_blank_block();
+    let bytes = bincode::serialize(&blank_block)?;
+    let len = bytes.len();
+
+    let chunk76 = &bytes[(76 * 64)..(77 * 64)];
+    let chunk77 = &bytes[(77 * 64)..];
+
+    //println!("Bytes: {}", hex::encode(&bytes));
+    println!("Block length: {}", len);
+    println!("Chunk 76: {:x?}", chunk76);
+    println!("Chunk 77: {:x?}", chunk77);
+    // println!("{:x?}", bytes);
+
+    let _hash = hash_sha256(&bytes);
+
+    Ok(())
+}
+
+fn make_blank_block() -> UnhashedBlock {
+    let mut unhashed_block = UnhashedBlock::default();
+    unhashed_block.nonce[0] = 0xDEAD_BEEF;
+    unhashed_block.nonce[7] = 0xDEAD_BEEF;
+
+    unhashed_block
 }
