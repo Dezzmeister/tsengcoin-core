@@ -32,47 +32,6 @@ pub struct BlockList {
     pub block: Block,
 }
 
-#[derive(Debug)]
-pub struct MerkleTree {
-    tree: Box<Node>
-}
-
-#[derive(Debug, Clone)]
-struct Node {
-    hash: u32,
-    left: Option<Box<Node>>,
-    right: Option<Box<Node>>,
-}
-
-impl MerkleTree {
-
-    fn build(self, new_blocks: &Vec<Block>) -> Node {
-        let leaves : Vec<Node> = new_blocks.iter().map(|block| 
-            Node {left: None, right: None, hash: block.hash.iter().sum()}).collect();
-        return Self::build_helper(leaves)
-    }
-
-    fn build_helper(leaves: Vec<Node>) -> Node {
-
-        if leaves.len() < 2 {
-            return Node{left: None, right: None, hash: leaves[0].hash}
-        }
-        let mid = leaves.len() / 2;
-        leaves[..mid].to_vec();
-        let left = Self::build_helper(leaves[..mid].to_vec());
-        let right = Self::build_helper(leaves[mid..].to_vec());
-        let left_hash : u32 = left.hash;
-        let right_hash: u32 = right.hash;
-        return Node{left: None , right: None, hash: left_hash + right_hash}
-    }
-
-    fn get_hash(self) -> u32 {
-        self.tree.hash
-    }
-
-}
-
-
 pub type Blockchain = Vec<Block>;
 
 pub fn load_blockchain() -> Blockchain {
