@@ -4,7 +4,7 @@ use chrono::{Utc, TimeZone};
 use ring::signature::EcdsaKeyPair;
 use serde::{Serialize, Deserialize};
 
-use crate::{wallet::{Transaction, hex_to_wallet, load_wallet, UnsignedTransaction, sign_transaction, keypair_to_wallet}, hash::hash_block};
+use crate::{wallet::{Transaction, hex_to_wallet, load_wallet, UnsignedTransaction, sign_transaction, keypair_to_wallet}, hash::{hash_block, hash_sha256}};
 use crate::hash::Hash;
 
 pub const BLOCK_REWARD: u64 = 100;
@@ -32,7 +32,47 @@ pub struct BlockList {
     pub block: Block,
 }
 
-// TODO: Merkle tree
+#[derive(Debug)]
+pub struct MerkleTree {
+    tree: Box<Node>
+}
+
+#[derive(Debug, Clone)]
+struct Node {
+    hash: u32,
+    left: Option<Box<Node>>,
+    right: Option<Box<Node>>,
+}
+
+impl MerkleTree {
+
+    fn build(self, new_blocks: &Vec<Block>) -> Node {
+        let leaves : Vec<Node> = new_blocks.iter().map(|block| 
+            Node {left: None, right: None, hash: block.hash.iter().sum()}).collect();
+        return Self::build_helper(leaves)
+    }
+
+    fn build_helper(leaves: Vec<Node>) -> Node {
+
+        if leaves.len() < 2 {
+            return Node{left: None, right: None, hash: leaves[0].hash}
+        }
+        let mid = leaves.len() / 2;
+        leaves[..mid].to_vec();
+        let left = Self::build_helper(leaves[..mid].to_vec());
+        let right = Self::build_helper(leaves[mid..].to_vec());
+        let left_hash : u32 = left.hash;
+        let right_hash: u32 = right.hash;
+        return Node{left: None , right: None, hash: left_hash + right_hash}
+    }
+
+    fn get_hash(self) -> u32 {
+        self.tree.hash
+    }
+
+}
+
+
 pub type Blockchain = Vec<Block>;
 
 pub fn load_blockchain() -> Blockchain {
@@ -61,6 +101,7 @@ pub fn append_blocks(blockchain: &Blockchain, new_blocks: &Vec<Block>) -> Blockc
 
     out
 }
+
 
 ///
 /// This code is temporary! We just need it to create a genesis block which can then be serialized and loaded directly from a file.
