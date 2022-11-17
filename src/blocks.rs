@@ -34,7 +34,6 @@ pub struct BlockList {
     pub block: Block,
 }
 
-// TODO: Merkle tree
 pub type Blockchain = Vec<Block>;
 
 pub fn load_blockchain() -> Blockchain {
