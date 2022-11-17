@@ -1,10 +1,10 @@
 use std::{path::Path, fs::File, io::Write};
 
-use chrono::{Utc, TimeZone};
+use chrono::{Utc, TimeZone, DateTime};
 use ring::signature::EcdsaKeyPair;
 use serde::{Serialize, Deserialize};
 
-use crate::{wallet::{Transaction, hex_to_wallet, load_wallet, UnsignedTransaction, sign_transaction, keypair_to_wallet}, hash::hash_block};
+use crate::{wallet::{Transaction, hex_to_wallet, load_wallet, UnsignedTransaction, sign_transaction, keypair_to_wallet, Wallet}, hash::hash_block};
 use crate::hash::Hash;
 
 pub const BLOCK_REWARD: u64 = 100;
@@ -15,7 +15,8 @@ const BLOCKCHAIN_PATH: &str = "blockchain.dat";
 pub struct Block {
     pub prev_hash: Hash,
     pub transactions: [Transaction; 16],
-    pub nonce: [u32; 8],
+    pub timestamp: DateTime<Utc>,
+    pub nonce: [u8; 32],
     pub hash: Hash
 }
 
@@ -23,7 +24,8 @@ pub struct Block {
 pub struct UnhashedBlock {
     pub prev_hash: Hash,
     pub transactions: [Transaction; 16],
-    pub nonce: [u32; 8],
+    pub timestamp: DateTime<Utc>,
+    pub nonce: [u8; 32],
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,6 +64,13 @@ pub fn append_blocks(blockchain: &Blockchain, new_blocks: &Vec<Block>) -> Blockc
     out
 }
 
+pub fn make_block_reward(winner: Wallet, winner_keypair: &EcdsaKeyPair) -> Transaction {
+    let mint_wallet = hex_to_wallet(MINT_WALLET).expect("Failed to convert mint wallet from hex");
+    let unsigned_transaction = UnsignedTransaction::new(mint_wallet, winner, BLOCK_REWARD);
+
+    sign_transaction(unsigned_transaction, winner_keypair)
+}
+
 ///
 /// This code is temporary! We just need it to create a genesis block which can then be serialized and loaded directly from a file.
 /// Of course we don't want wallets with weak passwords like "horse" and "password1" to have all of the currency, so the final genesis block
@@ -87,11 +96,13 @@ pub fn make_genesis_block() -> Block {
         transactions[i + 8] = transaction2;
     }
 
-    let unhashed = UnhashedBlock{prev_hash: [0 as u32; 8], transactions, nonce: [0 as u32; 8]};
+    let timestamp = Utc.ymd(2022, 11, 2).and_hms(12, 0, 0);
+
+    let unhashed = UnhashedBlock{prev_hash: [0 as u32; 8], transactions, timestamp, nonce: [0 as u8; 32]};
     let hash = hash_block(&unhashed).expect("Failed to hash genesis block");
 
     // TODO: Finish this, load wallets from files
-    Block { prev_hash: [0 as u32; 8], transactions: unhashed.transactions, nonce: [0 as u32; 8], hash }
+    Block { prev_hash: [0 as u32; 8], transactions: unhashed.transactions, timestamp: unhashed.timestamp, nonce: [0 as u8; 32], hash }
 }
 
 pub fn make_genesis_transaction(sender_keypair: &EcdsaKeyPair, receiver: [u8; 65], i: usize) -> Transaction {

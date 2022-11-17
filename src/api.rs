@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rand::seq::SliceRandom;
 use serde::{Serialize, Deserialize};
 
-use crate::{State, CURRENT_VERSION, blocks::{Block, append_blocks}, wallet::Transaction, verify::{verify_new_transaction, verify_blocks}};
+use crate::{State, CURRENT_VERSION, blocks::{Block, append_blocks}, wallet::{Transaction, transaction_time_comparator}, verify::{verify_new_transaction, verify_blocks}, miner::{check_and_start_miner}};
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum Request {
@@ -149,16 +149,19 @@ pub fn broadcast_transaction(neighbor: &SocketAddr, transaction: Transaction, ve
 }
 
 pub fn handle_get_nodes_req(conn: &TcpStream, req_data: GetNodesRequest, state_mut: &Mutex<State>) {
-    let mut state = state_mut.lock().unwrap();
+    let mut guard = state_mut.lock().unwrap();
+    let mut state = &mut *guard;
     let caller_ip = conn.peer_addr().expect("Failed to get remote node's IP");
 
-    let res = GetNodesResponse{ nodes: (*state).nodes.to_vec(), your_ip: caller_ip.ip(), my_version: CURRENT_VERSION, my_best_height: (*state).blockchain.len() };
+    let res = GetNodesResponse{ nodes: state.nodes.to_vec(), your_ip: caller_ip.ip(), my_version: CURRENT_VERSION, my_best_height: state.blockchain.len() };
     let new_node = RemoteNode{ip: caller_ip.ip(), port: (&req_data).listen_port, version: (&req_data).version, last_msg: Utc::now(), best_height: (&req_data).best_height, dead: false};
 
     // Add seen node to state
-    if !(*state).nodes.contains(&new_node) {
-        (*state).nodes.push(new_node);
+    if !state.nodes.contains(&new_node) {
+        state.nodes.push(new_node);
     }
+
+    state.nodes = dedup_nodes(state.ip, state.port, &state.nodes);
     
     bincode::serialize_into(conn, &res).expect("Failed to respond to get nodes request");
 
@@ -223,6 +226,7 @@ pub fn handle_broadcast_transaction_req(conn: &TcpStream, req_data: BroadcastTra
     println!("Received transaction: {} TsengCoin: {} to {}", new_transaction.amount, hex::encode(new_transaction.sender), hex::encode(new_transaction.receiver));
 
     state.pending_transactions.push(new_transaction);
+    state.pending_transactions.sort_by(transaction_time_comparator);
     
     for node in &mut state.nodes {
         let socket_addr = SocketAddr::new(node.ip, node.port);
@@ -232,6 +236,8 @@ pub fn handle_broadcast_transaction_req(conn: &TcpStream, req_data: BroadcastTra
             node.dead = true;
         }
     }
+
+    check_and_start_miner(state_mut);
 }
 
 pub fn listen_for_connections(this_addr: SocketAddr, handle_connection: ConnectionHandler, state_mut: &Mutex<State>) -> Result<(), Box<dyn Error>> {
@@ -308,6 +314,7 @@ pub fn sync_blocks(state: &mut State ) {
 
             if verification.is_err() {
                 println!("Received invalid blockchain from node");
+                // TODO: Increase ban score of node
                 continue;
             }
 
@@ -322,4 +329,34 @@ pub fn sync_blocks(state: &mut State ) {
     }
 
     // All the nodes we needed were dead... ask for more nodes
+}
+
+pub fn dedup_nodes(my_ip: Option<IpAddr>, my_port: u16, neighbors: &Vec<RemoteNode>) -> Vec<RemoteNode> {
+    let mut out: Vec<RemoteNode> = vec![RemoteNode::default(); neighbors.len()];
+    out.copy_from_slice(neighbors);
+
+    // Sort by port. PartialEq for RemoteNode compares the IP and port, so we can call `dedup`
+    // on this sorted array because any equivalent nodes will be consecutive
+    out.sort_by(|x, y| {
+        if x.port > y.port {
+            Ordering::Greater
+        } else if x.port < y.port {
+            Ordering::Less
+        } else {
+            Ordering::Equal
+        }
+    });
+
+    out.dedup();
+
+    // Remove oursevles because we are not our own neighbor
+    if my_ip.is_some() {
+        out = out
+        .iter()
+        .filter(|x| (x.ip == my_ip.unwrap() && x.port == my_port))
+        .map(|x| *x)
+        .collect::<Vec<RemoteNode>>();
+    }
+
+    out
 }

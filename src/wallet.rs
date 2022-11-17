@@ -1,4 +1,4 @@
-use std::{error::Error, num::{NonZeroU32}, fs::File, io::Write, path::Path};
+use std::{error::Error, num::{NonZeroU32}, fs::File, io::Write, path::Path, cmp::Ordering};
 use chrono::{Utc, DateTime};
 use ring::{pbkdf2, digest, aead::{SealingKey, AES_256_GCM, UnboundKey, BoundKey, Nonce, NonceSequence, Aad, OpeningKey, NONCE_LEN}, error::Unspecified};
 use serde::{Serialize, Deserialize};
@@ -66,6 +66,12 @@ impl Default for Transaction {
         out.timestamp = Utc::now();
 
         out
+    }
+}
+
+impl UnsignedTransaction {
+    pub fn new(sender: Wallet, receiver: Wallet, amount: u64) -> Self {
+        Self { sender, receiver, timestamp: Utc::now(), nonce: rand::random(), amount }
     }
 }
 
@@ -243,4 +249,14 @@ pub fn keypair_to_wallet(keypair: &EcdsaKeyPair) -> Wallet {
     out.copy_from_slice(keypair.public_key().as_ref());
 
     out
+}
+
+pub fn transaction_time_comparator(a: &Transaction, b: &Transaction) -> Ordering {
+    if a.timestamp > b.timestamp {
+        Ordering::Greater
+    } else if a.timestamp == b.timestamp {
+        Ordering::Equal
+    } else {
+        Ordering::Less
+    }
 }

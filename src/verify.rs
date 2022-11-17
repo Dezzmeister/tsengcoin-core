@@ -151,6 +151,7 @@ fn verify_block_hash(blockchain: &Blockchain, new_block: &Block) -> Result<()> {
     let unhashed_block = UnhashedBlock{
         prev_hash: new_block.prev_hash,
         transactions: new_block.transactions,
+        timestamp: new_block.timestamp,
         nonce: new_block.nonce,
     };
 
